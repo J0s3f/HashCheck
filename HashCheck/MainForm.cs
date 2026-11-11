@@ -4,6 +4,8 @@ using System.Data.Common;
 using System.Data.SQLite;
 using System.Drawing;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 namespace HashCheck
 {
@@ -20,7 +22,8 @@ namespace HashCheck
 		private Button button1;
 		private Label label1;
         private OpenFileDialog openFileDialog1;
-        System.Threading.Thread workThread;
+        private CancellationTokenSource _cts;
+        private Task _workTask;
 		public MainForm()
 		{
 			this.InitializeComponent();
@@ -36,24 +39,26 @@ namespace HashCheck
 		}
 		private void Button2Click(object sender, EventArgs e)
 		{
-            if (workThread != null && workThread.ThreadState == System.Threading.ThreadState.Suspended)
-                workThread.Resume();
+            if (_workTask != null && !_workTask.IsCompleted)
+            {
+                // Task is already running, handle pause/resume if needed.
+                // For simplicity, we just ignore if running, but we removed suspend/resume.
+                return;
+            }
+
+            if (this.FileName != "" && File.Exists(this.FileName))
+            {
+                _cts = new CancellationTokenSource();
+                var token = _cts.Token;
+                _workTask = Task.Run(() => runQuery(token), token);
+            }
             else
             {
-                if (this.FileName != "" && File.Exists(this.FileName))
-                {
-                    workThread = new System.Threading.Thread(runQuery);
-                    workThread.Start();
-                    return;
-                }
-                else
-                {
-                    MessageBox.Show("Database not Found", "Error", MessageBoxButtons.OK);
-                }
+                MessageBox.Show("Database not Found", "Error", MessageBoxButtons.OK);
             }
 		}
 
-        private void runQuery()
+        private void runQuery(CancellationToken token)
         {
             try
             {
@@ -72,7 +77,7 @@ namespace HashCheck
                         }
                         catch (SQLiteException e)
                         {
-                            if (e.ErrorCode == SQLiteErrorCode.Busy)
+                            if (e.ErrorCode == (int)SQLiteErrorCode.Busy)
                             {
                                 System.Threading.Thread.Sleep(200);
                                 goto lolo;
@@ -98,15 +103,21 @@ namespace HashCheck
                         bool flag = false;
                         MD5crack mD5crack = new MD5crack_hashkiller();
                         MD5crack mD5crack2 = new MD5crack_c0llision();
-                        this.progressBar1.Maximum = maximum;
-                        this.label3.Text = "Total: " + maximum.ToString();
+                        this.Invoke((MethodInvoker)delegate {
+                            this.progressBar1.Maximum = maximum;
+                            this.label3.Text = "Total: " + maximum.ToString();
+                        });
                         int num = 0;
                         do
                         {
+                            if (token.IsCancellationRequested)
+                                break;
                             flag = dbDataReader.Read();
                             num++;
-                            this.progressBar1.Value = num;
-                            this.label2.Text = "Current: " + num.ToString();
+                            this.Invoke((MethodInvoker)delegate {
+                                this.progressBar1.Value = num;
+                                this.label2.Text = "Current: " + num.ToString();
+                            });
                             string text = dbDataReader.GetValue(0).ToString();
                             if (/*!this.AllReadyDone(text)*/true)
                             {
@@ -129,7 +140,7 @@ namespace HashCheck
                                         }
                                         catch (SQLiteException e)
                                         {
-                                            if (e.ErrorCode == SQLiteErrorCode.Busy)
+                                            if (e.ErrorCode == (int)SQLiteErrorCode.Busy)
                                             {
                                                 System.Threading.Thread.Sleep(200);
                                                 goto insertpwd;
@@ -145,11 +156,19 @@ namespace HashCheck
                     return;
                 }
             }
-            catch (System.Threading.ThreadAbortException ex)
+            catch (Exception ex)
             {
-                MessageBox.Show(ex.Message);
-                this.dbcon.Close();
-                this.dbcon = null;
+                this.Invoke((MethodInvoker)delegate {
+                    MessageBox.Show(ex.Message);
+                });
+            }
+            finally
+            {
+                if (this.dbcon != null)
+                {
+                    this.dbcon.Close();
+                    this.dbcon = null;
+                }
             }
         }
 		private bool AllReadyDone(string md5)
@@ -169,7 +188,7 @@ namespace HashCheck
                 }
                 catch (SQLiteException e)
                 {
-                    if (e.ErrorCode == SQLiteErrorCode.Busy)
+                    if (e.ErrorCode == (int)SQLiteErrorCode.Busy)
                     {
                         System.Threading.Thread.Sleep(200);
                         goto queryexisting;
@@ -285,15 +304,28 @@ namespace HashCheck
 
         private void button3_Click(object sender, EventArgs e)
         {
-            if (workThread != null && workThread.ThreadState != System.Threading.ThreadState.Suspended)
-                workThread.Suspend();
+            if (_cts != null && !_cts.IsCancellationRequested)
+            {
+                _cts.Cancel();
+            }
         }
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
-            if(workThread!=null)
-                workThread.Abort();
-            workThread = null;
+            if (_cts != null && !_cts.IsCancellationRequested)
+            {
+                _cts.Cancel();
+            }
+
+            if (_workTask != null && !_workTask.IsCompleted)
+            {
+                try
+                {
+                    _workTask.Wait(500); // Wait a short time for graceful exit
+                }
+                catch { }
+            }
+
             if (dbcon != null)
             {
                 try
@@ -304,9 +336,7 @@ namespace HashCheck
                 {
                 }
             }
-                dbcon=null;
-
-            
+            dbcon = null;
         }
 	}
 }

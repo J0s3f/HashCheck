@@ -1,12 +1,14 @@
 using System;
 using System.IO;
-using System.Net;
+using System.Net.Http;
+using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
 namespace HashCheck
 {
     public class MD5crack_hashkiller : MD5crack
     {
+        private static readonly HttpClient _httpClient = new HttpClient();
         public override MD5crack_result crack(string hash_string)
         {
             MD5crack_result mD5crack_result = new MD5crack_result(hash_string);
@@ -45,15 +47,17 @@ namespace HashCheck
         }
         protected XElement GetResponse(string uri)
         {
-            HttpWebRequest httpWebRequest = WebRequest.Create(uri) as HttpWebRequest;
-            httpWebRequest.UserAgent = ".NET Cracker";
-            httpWebRequest.KeepAlive = false;
-            httpWebRequest.Timeout = 15000;
-            HttpWebResponse httpWebResponse = httpWebRequest.GetResponse() as HttpWebResponse;
-            if (httpWebRequest.HaveResponse && httpWebResponse != null)
+            var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Add("User-Agent", ".NET Cracker");
+            request.Headers.ConnectionClose = true;
+
+            using var cts = new System.Threading.CancellationTokenSource(15000);
+            var response = _httpClient.SendAsync(request, cts.Token).Result;
+
+            if (response.IsSuccessStatusCode)
             {
-                StreamReader streamReader = new StreamReader(httpWebResponse.GetResponseStream());
-                return XElement.Parse(streamReader.ReadToEnd());
+                var content = response.Content.ReadAsStringAsync().Result;
+                return XElement.Parse(content);
             }
             throw new Exception("Error fetching data.");
         }
